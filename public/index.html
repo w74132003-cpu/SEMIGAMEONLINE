@@ -814,6 +814,22 @@ const RM=(()=>{
   if(playEnd){const r=playEnd-nowS();c.textContent=r>0?'⏱ 剩 '+mmss(r):'⏱ 時間到';c.className=r<=60000?'low':''}
   if(!fin&&ws&&ws.readyState===1){const a=Q.length?Math.round(Q.reduce((x,y)=>x+y)/Q.length):100;if(step!==lastStep||a!==lastAvg){lastStep=step;lastAvg=a;send({t:'prog',step,avg:a})}}
  },1000);
+ /* 回報位置與事件給老師端（俯瞰地圖與動態跑馬燈用） */
+ const EV0={d:0,s:0,st:0,ph:0,eq:false,hot:false},PS={x:1e9,z:1e9,t:0};
+ setInterval(()=>{
+  if(!started||fin||ST.locked||!ws||ws.readyState!==1)return;
+  try{
+   const e=EV0,now=Date.now();
+   if(drops>e.d)send({t:'ev',k:'drop'});e.d=drops;
+   if(scold>e.s)send({t:'ev',k:'scold'});e.s=scold;
+   if(step>e.st)send({t:'ev',k:'st',i:step-1,q:Q[step-1]|0});e.st=step;
+   if(ph>e.ph){const k=ph===2?'suit':ph===3?'shower':ph===4?'foup':'';if(k)send({t:'ev',k})}e.ph=ph;
+   const eq=!!EQ.on;if(eq&&!e.eq)send({t:'ev',k:'quake'});e.eq=eq;
+   const hot=typeof hotSt!=='undefined'&&!!hotSt;if(hot&&!e.hot)send({t:'ev',k:'rush'});e.hot=hot;
+   const x=pl.position.x,z=pl.position.z;
+   if(now-PS.t>=1000&&Math.hypot(x-PS.x,z-PS.z)>.25){PS.x=x;PS.z=z;PS.t=now;send({t:'pos',x:Math.round(x*10)/10,z:Math.round(z*10)/10})}
+  }catch(x){}
+ },400);
  function finish(y,h){fin=true;doneMsg={t:'done',y,h:Math.round(h),drops,scold,chatM};send(doneMsg)}
  function wait(){
   ST.locked=true;ST.waiting=true;$$('ct').style.display='none';

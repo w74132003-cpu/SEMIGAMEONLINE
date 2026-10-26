@@ -94,6 +94,7 @@ const rooms = new Map();
 const rnd = n => crypto.randomInt(n);
 function newCode() { for (let k = 0; k < 200; k++) { let c = ''; for (let i = 0; i < 4; i++) c += CODE_CHARS[rnd(CODE_CHARS.length)]; if (!rooms.has(c)) return c; } return null; }
 const token = () => crypto.randomBytes(9).toString('base64url');
+const EVK = { drop: 1, scold: 1, st: 1, suit: 1, shower: 1, foup: 1, quake: 1, rush: 1 };
 const num = (v, lo, hi, d) => { v = +v; return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d; };
 function cleanName(s) {
   s = String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f<>&"'`\\]/g, '').replace(/\s+/g, ' ').trim();
@@ -105,7 +106,7 @@ function makeRoom(joinSec, playMin) {
   const code = newCode(); if (!code) return null;
   const now = Date.now();
   const r = { code, hostKey: token(), host: null, phase: 'lobby', joinSec, playMin, joinEnd: now + joinSec * 1000, startAt: 0, playEnd: 0, endedAt: 0,
-    players: new Map(), timers: {}, dirty: false, ldirty: false, created: now, touched: now, hostGone: 0 };
+    players: new Map(), evlog: [], evId: 0, cnt: { drop: 0, scold: 0, perfect: 0 }, timers: {}, dirty: false, ldirty: false, created: now, touched: now, hostGone: 0 };
   rooms.set(code, r); schedule(r); return r;
 }
 function schedule(r) {
@@ -146,7 +147,8 @@ function snapshot(r) {
   const list = r.phase === 'ended' || r.phase === 'playing' ? ranking(r) : [...r.players.values()];
   return { t: 'room', now: Date.now(), code: r.code, phase: r.phase, joinSec: r.joinSec, playMin: r.playMin, joinEnd: r.joinEnd, startAt: r.startAt, playEnd: r.playEnd,
     scoreText: SCORE_TEXT,
-    players: list.map(p => ({ name: p.name, step: p.step, avg: p.avg, done: p.done, score: p.score, rank: p.rank || null, y: p.y, h: p.h, drops: p.drops, scold: p.scold, sus: !!p.sus, on: !!sock(p) })) };
+    ev: r.evlog.slice(-40), cnt: r.cnt,
+    players: list.map(p => ({ name: p.name, x: p.x, z: p.z, step: p.step, avg: p.avg, done: p.done, score: p.score, rank: p.rank || null, y: p.y, h: p.h, drops: p.drops, scold: p.scold, sus: !!p.sus, on: !!sock(p) })) };
 }
 function pushHost(r) { r.dirty = false; if (r.host && r.host.open) r.host.send(snapshot(r)); }
 function pushLobby(r) {
@@ -156,7 +158,7 @@ function pushLobby(r) {
 }
 function touch(r) {
   r.touched = Date.now();
-  if (!r.dirty) { r.dirty = true; setTimeout(() => { if (r.dirty) pushHost(r); }, 150); }
+  if (!r.dirty) { r.dirty = true; setTimeout(() => { if (r.dirty) pushHost(r); }, r.phase === 'playing' ? 300 : 150); }
   if (r.phase === 'lobby' && !r.ldirty) { r.ldirty = true; setTimeout(() => { if (r.ldirty && r.phase === 'lobby') pushLobby(r); }, 300); }
 }
 
@@ -217,7 +219,7 @@ function onMessage(ws, text) {
     } else {
       if (r.phase !== 'lobby') return ws.send({ t: 'err', code: 'locked', msg: '房間已經鎖定開始了，下一場再來吧' });
       if (r.players.size >= MAX_PLAYERS) return ws.send({ t: 'err', code: 'full', msg: '房間已滿' });
-      p = { name, token: tk || token(), ws: null, step: 0, avg: 100, done: false, score: 0, y: 0, h: 0, drops: 0, scold: 0, chatM: 0, rank: null, sus: false };
+      p = { name, token: tk || token(), ws: null, step: 0, avg: 100, done: false, score: 0, y: 0, h: 0, drops: 0, scold: 0, chatM: 0, rank: null, sus: false, x: -13.5, z: 14, evT: 0, evN: 0 };
       r.players.set(key, p);
     }
     p.ws = ws; ws.data = Object.assign(d, { role: 'player', room: r, key });
@@ -228,6 +230,14 @@ function onMessage(ws, text) {
   if (d.role === 'player' && d.room) {
     const r = d.room, p = r.players.get(d.key); if (!p || p.ws !== ws) return;
     if (m.t === 'prog' && r.phase === 'playing' && !p.done) { p.step = num(m.step, 0, 7, p.step) | 0; p.avg = Math.round(num(m.avg, 0, 100, p.avg)); return touch(r); }
+    if (m.t === 'pos' && r.phase === 'playing' && !p.done) { p.x = Math.round(num(m.x, -30, 40, p.x) * 10) / 10; p.z = Math.round(num(m.z, -15, 20, p.z) * 10) / 10; return touch(r); }
+    if (m.t === 'ev' && r.phase === 'playing' && !p.done && EVK[m.k]) { // 即時事件（給老師端的動態與跑馬燈用）
+      const nw = Date.now(); if (nw - p.evT > 10000) { p.evT = nw; p.evN = 0; } if (++p.evN > 40) return; // 每 10 秒最多 40 則，防洗版
+      const e = { id: ++r.evId, t: nw, n: p.name, k: m.k };
+      if (m.k === 'st') { e.i = num(m.i, 0, 6, 0) | 0; e.q = num(m.q, 0, 100, 0) | 0; if (e.q >= 90) r.cnt.perfect++; }
+      if (m.k === 'drop') r.cnt.drop++; if (m.k === 'scold') r.cnt.scold++;
+      r.evlog.push(e); if (r.evlog.length > 60) r.evlog.shift(); return touch(r);
+    }
     if (m.t === 'done' && r.phase === 'playing' && !p.done) {
       const q = { y: Math.round(num(m.y, 0, 100, 0)), h: Math.round(num(m.h, 0, 5000, 0)), drops: num(m.drops, 0, 99, 0) | 0, scold: num(m.scold, 0, 99, 0) | 0 };
       p.y = q.y; p.h = q.h; p.drops = q.drops; p.scold = q.scold; p.chatM = num(m.chatM, 0, 999, 0) | 0;
